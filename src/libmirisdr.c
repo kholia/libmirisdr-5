@@ -56,13 +56,6 @@
 int mirisdr_setup (mirisdr_dev_t **out_dev, mirisdr_dev_t *dev) {
     int r;
 
-    /* reset je potřeba, jinak občas zařízení odmítá komunikovat */
-    mirisdr_reset(dev);
-
-    /* ještě je třeba vždy ukončit i streamování, které může být při otevření aktivní */
-    mirisdr_streaming_stop(dev);
-    mirisdr_adc_stop(dev);
-
     if (libusb_kernel_driver_active(dev->dh, 0) == 1) {
         dev->driver_active = 1;
 
@@ -87,9 +80,20 @@ int mirisdr_setup (mirisdr_dev_t **out_dev, mirisdr_dev_t *dev) {
     }
 
     if ((r = libusb_claim_interface(dev->dh, 0)) < 0) {
-        fprintf( stderr, "failed to claim miri usb device %u with code %d\n", dev->index, r);
+        fprintf(stderr, "failed to claim miri usb device %u with code %d: %s\n", dev->index, r, libusb_error_name(r));
+        if (r == LIBUSB_ERROR_BUSY) {
+            fprintf(stderr, "Verify that the SDRplay background service is not running by `sudo systemctl stop sdrplay` and try again.\n");
+        }
+
         goto failed;
     }
+
+    /* reset je potřeba, jinak občas zařízení odmítá komunikovat */
+    mirisdr_reset(dev);
+
+    /* ještě je třeba vždy ukončit i streamování, které může být při otevření aktivní */
+    mirisdr_streaming_stop(dev);
+    mirisdr_adc_stop(dev);
 
     /* inicializace tuneru */
     dev->freq = DEFAULT_FREQ;
@@ -193,7 +197,6 @@ int mirisdr_open (mirisdr_dev_t **p, uint32_t index) {
 failed:
     if (dev) {
         if (dev->dh) {
-            libusb_release_interface(dev->dh, 0);
             libusb_close(dev->dh);
         }
         if (dev->ctx) libusb_exit(dev->ctx);
