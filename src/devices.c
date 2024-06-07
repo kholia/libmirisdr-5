@@ -124,6 +124,9 @@ int mirisdr_get_device_usb_strings (uint32_t index, char *manufact, char *produc
             strcpy(manufact, device->manufacturer);
             strcpy(product, device->product);
 
+            char* serial_cursor = serial;
+            serial_cursor += sprintf(serial_cursor, "%d-%d:", libusb_get_bus_number(list[i]), libusb_get_device_address(list[i]));
+
 #if LIBUSBX_API_VERSION >= 0x01000102 
             uint8_t usb_path[16];
             int path_len = libusb_get_port_numbers(list[i], usb_path, sizeof(usb_path));
@@ -131,13 +134,10 @@ int mirisdr_get_device_usb_strings (uint32_t index, char *manufact, char *produc
                 path_len = sizeof(usb_path);
             }
 
-            char* serial_cursor = serial;
             for (int u = 0; u < path_len; u++) {
                 serial_cursor += sprintf(serial_cursor, "%d.", usb_path[u]);
             }
             *(serial_cursor - 1) = '\0'; // remove last dot
-#else
-            sprintf(serial, "%08u", index + 1);
 #endif
 
             libusb_free_device_list(list, 1);
