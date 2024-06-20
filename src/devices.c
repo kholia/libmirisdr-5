@@ -124,8 +124,11 @@ int mirisdr_get_device_usb_strings (uint32_t index, char *manufact, char *produc
             strcpy(manufact, device->manufacturer);
             strcpy(product, device->product);
 
+            // because all known SDRplay clones do not have an EEPROM chip with the serial number,
+            // use the physical location of the USB port
+
             char* serial_cursor = serial;
-            serial_cursor += sprintf(serial_cursor, "%d-%d:", libusb_get_bus_number(list[i]), libusb_get_device_address(list[i]));
+            serial_cursor += sprintf(serial_cursor, "%d:", libusb_get_bus_number(list[i]));
 
 #if LIBUSBX_API_VERSION >= 0x01000102 
             uint8_t usb_path[16];
@@ -137,8 +140,9 @@ int mirisdr_get_device_usb_strings (uint32_t index, char *manufact, char *produc
             for (int u = 0; u < path_len; u++) {
                 serial_cursor += sprintf(serial_cursor, "%d.", usb_path[u]);
             }
-            *(serial_cursor - 1) = '\0'; // remove last dot
+            
 #endif
+            *(serial_cursor - 1) = '\0'; // remove last dot or :
 
             libusb_free_device_list(list, 1);
             libusb_exit(ctx);
