@@ -52,6 +52,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 #if !defined (_WIN32) || defined(__MINGW32__)
 #include <unistd.h>
@@ -71,6 +72,7 @@
 #include <pthread.h>
 
 #include "mirisdr.h"
+#include "pskreporter.h"
 
 #include "convenience.c"
 
@@ -516,7 +518,7 @@ int atan_lut_init(void)
 {
 	int i = 0;
 
-	atan_lut = malloc(atan_lut_size * sizeof(int));
+	atan_lut = (int *)malloc(atan_lut_size * sizeof(int));
 
 	for (i = 0; i < atan_lut_size; i++) {
 		atan_lut[i] = (int) (atan((double) i / (1<<atan_lut_coef)) / 3.14159 * (1<<14));
@@ -829,8 +831,9 @@ void full_demod(struct demod_state *d)
 static void mirisdr_callback(unsigned char *buf, uint32_t len, void *ctx)
 {
 	int i;
-	struct dongle_state *s = ctx;
+	struct dongle_state *s = (struct dongle_state *)ctx;
 	char *buf8 = (char*) buf;
+
 	if (do_exit) {
 		return;}
 	if (!ctx) {
@@ -874,7 +877,8 @@ static void mirisdr_callback(unsigned char *buf, uint32_t len, void *ctx)
 
 static void *dongle_thread_fn(void *arg)
 {
-	struct dongle_state *s = arg;
+	struct dongle_state *s = (struct dongle_state *)arg;
+
 	mirisdr_read_async(s->dev, mirisdr_callback, s,
 		DEFAULT_ASYNC_BUF_NUMBER, s->buf_len);
 	return 0;
@@ -882,7 +886,7 @@ static void *dongle_thread_fn(void *arg)
 
 static void *demod_thread_fn(void *arg)
 {
-	struct demod_state *d = arg;
+	struct demod_state *d = (struct demod_state *)arg;
 	struct output_state *o = d->output_target;
 	while (!do_exit) {
 		safe_cond_wait(&d->ready, &d->ready_m);
@@ -908,7 +912,7 @@ static void *demod_thread_fn(void *arg)
 
 static void *output_thread_fn(void *arg)
 {
-	struct output_state *s = arg;
+	struct output_state *s = (struct output_state *)arg;
 	while (!do_exit) {
 		// use timedwait and pad out under runs
 		safe_cond_wait(&s->ready, &s->ready_m);
@@ -947,12 +951,149 @@ static void optimal_settings(int freq, int rate)
 	d->rate = (uint32_t)capture_rate;
 }
 
+// Dhiru's hack
+// https://github.com/drowe67/freedv-gui/tree/master/src/reporting
+// https://chat.deepseek.com
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <time.h>
+#include <stdint.h>
+
+#include "pskreporter.h"
+
+uint32_t new_frequency = 0;
+uint32_t old_frequency = 0;
+
+PskReporter reporter("VU3FOE", "MK68xm", "BharatSDR 0.1");
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define MAX_MESSAGE_LENGTH 100
+#define MAX_OUTPUT_LENGTH 200
+
+char output_callsign[MAX_OUTPUT_LENGTH];       // Buffer to store Python script output
+
+void call_python_parser(const char *message) {
+    char command[MAX_MESSAGE_LENGTH + 50]; // Buffer for the command
+    FILE *fp;
+
+    // Construct the command to execute the Python script
+    snprintf(command, sizeof(command), "python3 ft8_parser.py \"%s\"", message);
+
+    // Open a pipe to execute the command and read its output
+    fp = popen(command, "r");
+    if (fp == NULL) {
+        fprintf(stderr, "Error: Failed to execute Python script.\n");
+        return;
+    }
+
+    // Read the output of the Python script
+    while (fgets(output_callsign, sizeof(output_callsign), fp) != NULL) {
+    }
+
+    // Close the pipe
+    pclose(fp);
+}
+
+// Function to parse a line from ALL.TXT
+void parse_ft8_line(const char *line) {
+    char timestamp[20], frequency[10], mode[10], snr[10], dt[10], offset[10], message[100];
+    memset(timestamp, 0, sizeof(timestamp));
+    memset(frequency, 0, sizeof(frequency));
+    memset(mode, 0, sizeof(mode));
+    memset(snr, 0, sizeof(snr));
+    memset(dt, 0, sizeof(dt));
+    memset(offset, 0, sizeof(offset));
+    memset(message, 0, sizeof(message));
+
+    if (old_frequency == 0)
+        return;
+
+    // Use sscanf to parse the line
+    int parsed = sscanf(line, "%19s %9s Rx %9s %9s %9s %9s %99[^\n]", timestamp, frequency, mode, snr, dt, offset, message);
+
+    // Validate parsed fields
+    if (parsed >= 6) {
+        call_python_parser(message);
+        output_callsign[strlen(output_callsign) - 1] = 0;
+        fprintf(stderr, "%s\n", output_callsign);
+        reporter.addReceiveRecord(output_callsign, "FT8", old_frequency, atoi(snr));
+    }
+}
+
+// Thread function to run tail -f and process its output
+void* tail_thread(void* arg) {
+    const char* file_path = (const char*)arg;
+
+    // Construct the tail -f command
+    char command[256];
+    snprintf(command, sizeof(command), "tail -f %s", file_path);
+
+    // Open a pipe to the tail -f command
+    FILE* tail_output = popen(command, "r");
+    if (!tail_output) {
+        perror("popen");
+        pthread_exit(NULL);
+    }
+
+    // Read lines from the tail output
+    char line[256];
+    while (fgets(line, sizeof(line), tail_output)) {
+        // Parse and process the line
+        parse_ft8_line(line);
+    }
+
+    // Clean up (this will never be reached in this example)
+    pclose(tail_output);
+    pthread_exit(NULL);
+}
+
+// Function to expand ~ to the user's home directory
+char* expanduser(const char* path) {
+    if (path == NULL) {
+        return NULL;
+    }
+
+    // Check if the path starts with ~
+    if (path[0] == '~') {
+        // Get the HOME environment variable
+        const char* home = getenv("HOME");
+        if (home == NULL) {
+            fprintf(stderr, "Error: HOME environment variable not set.\n");
+            return NULL;
+        }
+
+        // Allocate memory for the expanded path
+        size_t home_len = strlen(home);
+        size_t path_len = strlen(path);
+        char* expanded_path = (char *)malloc(home_len + path_len); // ~ takes 1 character, so no need for +1
+        if (expanded_path == NULL) {
+            perror("malloc");
+            return NULL;
+        }
+
+        // Construct the expanded path
+        strcpy(expanded_path, home); // Copy the home directory
+        strcat(expanded_path, path + 1); // Append the rest of the path (after ~)
+
+        return expanded_path;
+    }
+
+    // If the path does not start with ~, return a copy of the original path
+    return strdup(path);
+}
+
 static void *controller_thread_fn(void *arg)
 {
 	// thoughts for multiple dongles
 	// might be no good using a controller thread if retune/rate blocks
 	int i;
-	struct controller_state *s = arg;
+	struct controller_state *s = (struct controller_state*)arg;
 
 	if (s->wb_mode) {
 		for (i=0; i < s->freq_len; i++) {
@@ -1012,16 +1153,86 @@ static void *controller_thread_fn(void *arg)
 	verbose_set_sample_rate(dongle.dev, dongle.rate);
 	fprintf(stderr, "Output at %u Hz.\n", demod.rate_in/demod.post_downsample);
 
-	while (!do_exit) {
-		safe_cond_wait(&s->hop, &s->hop_m);
-		if (s->freq_len <= 1) {
-			continue;}
-		/* hacky hopping */
-		s->freq_now = (s->freq_now + 1) % s->freq_len;
-		optimal_settings(s->freqs[s->freq_now], demod.rate_in);
-		mirisdr_set_center_freq(dongle.dev, dongle.freq);
-		dongle.mute = BUFFER_DUMP;
+	/* uint32_t frequency_schedule[] = {
+		14074000, 14074000, 21074000, 21074000, 7074000, 7074000, 28074000, 28074000,
+		18100000, 10136000, 3573000,
+		24915000, 24915000
+	}; */
+
+	const uint32_t frequency_schedule[] = {
+		// 1840000,   // 160 meters
+		// 1840000,   // 160 meters
+		// 3573000,   // 80 meters
+		// 3573000,   // 80 meters
+		// 5357000,   // 60 meters
+		// 5357000,   // 60 meters
+		28074000,  // 10 meters
+		28074000,  // 10 meters
+		7074000,   // 40 meters
+		7074000,   // 40 meters
+		10136000,  // 30 meters
+		10136000,  // 30 meters
+		14074000,  // 20 meters
+		14074000,  // 20 meters
+		18100000,  // 17 meters
+		18100000,  // 17 meters
+		21074000,  // 15 meters
+		21074000,  // 15 meters
+		24915000,  // 12 meters
+		24915000,  // 12 meters
+		28074000,  // 10 meters
+		28074000,  // 10 meters
+		// 50313000,  // 6 metes
+		// 50313000,  // 6 meters
+	};
+
+	// uint32_t NOF = 8 + 3 + 2;
+	uint32_t NOF = 16;
+	int frequency_index = 0;
+	time_t now;
+	struct tm *tm_info;
+
+	// Get the current time
+	time(&now);
+
+	const char* file_path = expanduser("~/.local/share/WSJT-X/ALL.TXT");
+
+	// Create a thread to run tail -f
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, tail_thread, (void*)file_path) != 0) {
+		perror("pthread_create");
+		exit(EXIT_FAILURE);
 	}
+
+	sleep(2);
+
+
+	while (!do_exit) {
+		// safe_cond_wait(&s->hop, &s->hop_m);
+		/* hacky hopping */
+		time(&now);
+		tm_info = localtime(&now);
+		int seconds = tm_info->tm_sec;
+		if (seconds == 14 || seconds == 29 || seconds == 44 || seconds == 59) {
+			frequency_index = (frequency_index + 1) % NOF;
+			new_frequency = frequency_schedule[frequency_index];
+			if (old_frequency != new_frequency)
+				reporter.send();
+			fprintf(stderr, "%d\n", new_frequency);
+			optimal_settings(new_frequency, demod.rate_in);
+			mirisdr_set_center_freq(dongle.dev, dongle.freq);
+			// fprintf(stderr, "> Tuned to %u\n", new_frequency);
+			verbose_set_frequency(dongle.dev, dongle.freq);
+			dongle.mute = BUFFER_DUMP;
+			sleep(7);
+			old_frequency = new_frequency;
+		}
+		usleep(100 * 1000);
+	}
+
+	// Wait for the thread to finish (it won't in this case)
+	pthread_join(thread, NULL);
+
 	return 0;
 }
 
@@ -1307,7 +1518,7 @@ int main(int argc, char **argv)
 		demod.terminate_on_squelch = 0;}
 
 	if (argc <= optind) {
-		output.filename = "-";
+		output.filename = (char *)"-";
 	} else {
 		output.filename = argv[optind];
 	}
@@ -1315,7 +1526,7 @@ int main(int argc, char **argv)
 	ACTUAL_BUF_LENGTH = lcm_post[demod.post_downsample] * DEFAULT_BUF_LENGTH;
 
 	if (!dev_given) {
-		dongle.dev_index = verbose_device_search("0");
+		dongle.dev_index = verbose_device_search((char *)"0");
 	}
 
 	if (dongle.dev_index < 0) {

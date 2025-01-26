@@ -19,3 +19,8 @@ The initial release contains these improvements and bug fixes from the originals
   - Stop using a deprecated version of libusb.h (1.0.13) and rely on the one installed in the system or specified in the cmake command line.
   - Restore gain settings after a frequency, bandwidth or IF change as this affects the gain settings.
   - Corrected baseband gain setting.
+
+References
+==========
+
+- https://gist.github.com/kholia/0803cb736be8665c9c76090872937de1

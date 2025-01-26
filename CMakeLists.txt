@@ -20,15 +20,15 @@
 ########################################################################
 # Project setup
 ########################################################################
-cmake_minimum_required(VERSION 2.6)
-project(mirisdr C)
+cmake_minimum_required(VERSION 3.5)
+project(mirisdr C CXX)
 
 # use, i.e. don't skip the full RPATH for the build tree
 set(CMAKE_SKIP_BUILD_RPATH  FALSE)
 
 # when building, don't use the install RPATH already
 # (but later on when installing)
-set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE) 
+set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
 
 SET(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
 
