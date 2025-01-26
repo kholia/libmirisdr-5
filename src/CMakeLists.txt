@@ -58,7 +58,7 @@ endif()
 # Build utility
 ########################################################################
 add_executable(miri_sdr miri_sdr.c)
-add_executable(miri_fm miri_fm.c)
+add_executable(miri_fm miri_fm.cpp pskreporter.cpp)
 set(INSTALL_TARGETS mirisdr_shared mirisdr_static miri_sdr miri_fm)
 
 target_link_libraries(miri_sdr mirisdr_shared
