@@ -21,7 +21,7 @@
 # Project setup
 ########################################################################
 cmake_minimum_required(VERSION 2.6)
-project(mirisdr C)
+project(mirisdr C CXX)
 
 # use, i.e. don't skip the full RPATH for the build tree
 set(CMAKE_SKIP_BUILD_RPATH  FALSE)
